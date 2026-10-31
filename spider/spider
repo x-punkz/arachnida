@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import re
+
+
+def recursive_parse(
+        parser: argparse.ArgumentParser,
+        args: argparse.Namespace
+        ) -> int:
+    # --- RECURSIVE/LIMIT PARSER ---
+    if args.limit is not None and not args.recursive:
+        parser.error("The [-l] option requires that recursive mode [-r] be "
+                     "enabled.")
+
+    if args.limit is not None and args.limit <= 0:
+        parser.error("The value of [-l] must be greater than 0.")
+
+    if args.limit is None:
+        args.limit = 5
+
+    return args.limit
+
+
+def url_validate(url: argparse.Namespace) -> None | str:
+    if not url.lower().startswith(("https://", "http://")):
+        # parser.error("Sets a valid URL.")
+        return "Sets a valid URL."
+
+    host = url.split("://", 1)[-1]
+
+    if host.startswith("["):
+        # parser.error("IPv6 not supported.")
+        return "IPv6 not supported."
+
+    host_port = re.split(r"[/?#]", host, maxsplit=1)[0]
+
+    domain, sep, port = host_port.partition(":")
+
+    labels = domain.split(".")
+
+    is_valid_domain = True
+    for label in labels:
+        if not re.fullmatch(r"[a-zA-Z0-9-]{1,63}", label):
+            is_valid_domain = False
+            break
+        if label.startswith("-") or label.endswith("-"):
+            is_valid_domain = False
+            break
+
+    if not is_valid_domain:
+        # parser.error("In URL, [domain] is invalid.")
+        return "In URL, [domain] is invalid."
+
+    if sep == ":":
+        if (not (port.isascii() and port.isdigit())
+                or int(port) not in range(1, 65536)):
+            # parser.error("In URL, [port] is invalid.")
+            return "In URL, [port] is invalid."
+
+    return None
+
+
+# def path_parse():
+def arguments() -> None:
+    parser = argparse.ArgumentParser(
+        prog='Spider',
+        formatter_class=argparse.RawTextHelpFormatter,
+        description="The spider program allow you to extract all the images "
+        "from a website,\n recursively, by providing a url as a parameter.\n"
+        "By default, the program will download the following file "
+        "extensions:\n"
+        "   .jpg/.jpeg, .png, .gif, .bmp",
+        epilog='''Examples:
+        ./spider -r -l 8 https://www.example.com
+        ./spider -r -p /home/user/data https://www.example.com
+
+        [-l] is only used if -r is also being used;
+            Otherwise, [-l] will not work.
+        If -l is not define, it defaults to "5".
+        If -p is not define, the default is "./data/".''',
+        # color=False
+    )
+    parser.add_argument(
+        "-r",
+        "--recursive",
+        action='store_true',
+        help='Recursively downloads the images in a URL received '
+        'as a parameter',
+    )
+
+    parser.add_argument(
+        "-l",
+        "--limit",
+        type=int,
+        default=None,
+        help="Set the recursion value"
+    )
+
+    parser.add_argument(
+        "-p",
+        "--path",
+        type=str,
+        help="Set the path for saving the download",
+        default="./data/"
+    )
+
+    parser.add_argument(
+        "url",
+        type=str,
+        help="The URL of the website from which the images are to be extracted"
+    )
+
+    args = parser.parse_args()
+
+    args.limit = recursive_parse(parser, args)
+
+    url_error = url_validate(args.url)
+    if url_error:
+        parser.error(url_error)
+
+    # --- PATH PARSER ---
+    if not os.path.exists(args.path):
+        try:
+            os.makedirs(args.path, exist_ok=True)
+            print(
+                "[INFO] The directory does not exist in the path\n"
+                f"creating directory '{args.path}'"
+                )
+        except OSError as e:
+            parser.error(f"Cannot create directory '{args.path}': {e}")
+
+
+def extract() -> None:
+    arguments()
+    print("OK")
+    # print("                                                     ")
+    # print("                                 .:-.                ")
+    # print("                            .=#+.                    ")
+    # print("                          .*+                        ")
+    # print("                         -%:                         ")
+    # print("                        *#.       :-*#%%#+=#=:       ")
+    # print("                       *#      .%@+                  ")
+    # print("                     .%#    .#@+. ***** *****  **  *****  ****** **"
+    #       "*** ")
+    # print("              ..  =%#=%=  =@%-   !*     *!  ** *!  *!  ** *!     *!"
+    #       "  **")
+    # print("          -%@#+#+ *#.:-% *#.      !*!!  *!**!  !!  *!  *! *!!:!  *!"
+    #       "!*! ")
+    # print("        +*-=   :@#=@#+:%=*#.         :! !!:    !:  !!  !! !:     !:"
+    #       "  :!")
+    # print("      :+%@@@@%*:#@@@@@%@@@%##=:. ::.: :  :     :   :: ::  : :::  ::"
+    #       "   :")
+    # print("    =@@@@@@@@@@@#%@@@%@@%@%. =#@@@#-                 ")
+    # print("   #@@@@@@@@@@@@@%@@%@%#@*:       :=#%*.             ")
+    # print("  %@@@@@@@@@@@@@@%%%@:  -%-           .*#.           ")
+    # print("  @@@@@@@@@@@@@@%*@*.    +#.            **           ")
+    # print("  @@@@@@@@@@@@%#%#.      :%:             #-          ")
+    # print("  *+       .:.#%-         +=             .*          ")
+    # print(" .:         =@*           +:               +         ")
+    # print("           *#.           .*.                         ")
+    # print("          +%             .+.                         ")
+    # print("         :-               :                          ")
+    # print("                                                     ")
+    # print("                                                     ")
+
+
+if __name__ == "__main__":
+    extract()
