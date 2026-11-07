@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import urllib.request
 import argparse
 import os
 import re
@@ -8,7 +9,6 @@ def recursive_parse(
         parser: argparse.ArgumentParser,
         args: argparse.Namespace
         ) -> int:
-    # --- RECURSIVE/LIMIT PARSER ---
     if args.limit is not None and not args.recursive:
         parser.error("The [-l] option requires that recursive mode [-r] be "
                      "enabled.")
@@ -22,25 +22,30 @@ def recursive_parse(
     return args.limit
 
 
-def url_validate(url: argparse.Namespace) -> None | str:
-    if not url.lower().startswith(("https://", "http://")):
-        # parser.error("Sets a valid URL.")
-        return "Sets a valid URL."
-
+def split_url(url: str) -> list[str]:
+    schema = url.partition("://")[0]
     host = url.split("://", 1)[-1]
+    host_port, rest = re.match(r'([^/?#]*)(.*)', host).groups()
+
+    return (schema, host, host_port, rest)
+
+
+def url_validate(url: str) -> None | str:
+    if not url.lower().startswith(("https://", "http://")):
+        return "The [url] must begin with http:// or https://."
+
+    _, host, host_port, _ = split_url(url)
 
     if host.startswith("["):
-        # parser.error("IPv6 not supported.")
         return "IPv6 not supported."
-
-    host_port = re.split(r"[/?#]", host, maxsplit=1)[0]
 
     domain, sep, port = host_port.partition(":")
 
     labels = domain.split(".")
-
     is_valid_domain = True
     for label in labels:
+        # fullmatch so pega se o texto todo obedecer a regra e devolve um
+        # obj match ou none
         if not re.fullmatch(r"[a-zA-Z0-9-]{1,63}", label):
             is_valid_domain = False
             break
@@ -49,20 +54,37 @@ def url_validate(url: argparse.Namespace) -> None | str:
             break
 
     if not is_valid_domain:
-        # parser.error("In URL, [domain] is invalid.")
         return "In URL, [domain] is invalid."
 
     if sep == ":":
         if (not (port.isascii() and port.isdigit())
                 or int(port) not in range(1, 65536)):
-            # parser.error("In URL, [port] is invalid.")
             return "In URL, [port] is invalid."
 
     return None
 
 
-# def path_parse():
-def arguments() -> None:
+def path_validate_and_create(path: str) -> None | str:
+    if os.path.exists(path):
+        if not os.path.isdir(path):
+            return "[path] is not a directory."
+
+        if not os.access(path, os.W_OK | os.X_OK):
+            return "The directory in [path] is not writable."
+    else:
+        try:
+            os.makedirs(path, exist_ok=True)
+            print(
+                "[INFO] The directory does not exist in the path\n"
+                f"created directory '{path}'"
+                )
+        except OSError as e:
+            return f"Cannot create directory '{path}': {e}"
+
+    return None
+
+
+def arguments() -> tuple[bool, int, str, str]:
     parser = argparse.ArgumentParser(
         prog='Spider',
         formatter_class=argparse.RawTextHelpFormatter,
@@ -119,21 +141,138 @@ def arguments() -> None:
     if url_error:
         parser.error(url_error)
 
-    # --- PATH PARSER ---
-    if not os.path.exists(args.path):
-        try:
-            os.makedirs(args.path, exist_ok=True)
-            print(
-                "[INFO] The directory does not exist in the path\n"
-                f"creating directory '{args.path}'"
-                )
-        except OSError as e:
-            parser.error(f"Cannot create directory '{args.path}': {e}")
+    path_error = path_validate_and_create(args.path)
+    if path_error:
+        parser.error(path_error)
+
+    return (args.recursive, args.limit, args.path, args.url)
 
 
-def extract() -> None:
-    arguments()
-    print("OK")
+def get_page(url: str) -> tuple[str | None, str | None]:
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            content = resp.headers.get_content_type()
+            if content != "text/html":
+                print(f"Ignored: {url} is {content}")
+                return None, None
+            data = resp.read()
+            charset = resp.headers.get_content_charset("utf-8")
+            converted_data = data.decode(charset, errors="replace")
+            return (converted_data, resp.url)
+    except OSError as e:
+        print(e)
+        return None, None
+
+
+def extract_images_path(html: str) -> list[str]:
+    images_line: list[str]
+    images: list[str] = []
+
+    images_line = re.findall(r"<img\s[^>]*>", html, re.IGNORECASE)
+
+    for tag_img in images_line:
+        matchs = re.search(
+            r'\ssrc=(?:"([^\"]*)"|\'([^\']*)\'|([^\s>]+))',
+            tag_img,
+            re.IGNORECASE
+        )
+        if matchs and any(matchs.groups()):
+            images.append(
+                (matchs.group(1) or matchs.group(2) or matchs.group(3))
+                .replace("&amp;", "&")
+            )
+
+    return images
+
+
+def extract_links_path(html: str) -> list[str]:
+    link_line: list[str]
+    links: list[str] = []
+
+    link_line = re.findall(r"<a\s[^>]*>", html, re.IGNORECASE)
+
+    for tag_a in link_line:
+        matchs = re.search(
+            r'\shref=(?:"([^\"]*)"|\'([^\']*)\'|([^\s>]+))',
+            tag_a,
+            re.IGNORECASE
+        )
+        if matchs and any(matchs.groups()):
+            links.append(
+                (matchs.group(1) or matchs.group(2) or matchs.group(3))
+                .replace("&amp;", "&")
+            )
+
+    return links
+
+
+def mount_url_path(url: str, path: str) -> str:
+    schema, base, origin, _ = split_url(url)
+    # print(schema, base, origin, resto)
+    if path:
+        if path.startswith("//"):
+            # print("1")
+            completed_url = schema + ":" + path
+
+        elif path.startswith("/"):
+            # print("2")
+            completed_url = schema + "://" + origin + path
+        else:
+            # print("3")
+            corte = base.rfind("/")
+            caminho = base[:corte + 1]
+            completed_url = schema + "://" + caminho + path
+    return completed_url
+
+
+def main() -> None:
+    images: list[str] = []
+    links: list[str] = []
+
+    is_recursive, limit, path, url = arguments()
+    pure_html, final_url = get_page(url)
+    if pure_html is None or final_url is None:
+        return "[Error] Html is not found"
+
+    images = extract_images_path(pure_html)
+    links = extract_links_path(pure_html)
+
+    mounted_path: list[str] = []
+    mounted_path = [mount_url_path(final_url, image) for image in images]
+    print(*mounted_path, sep="\n")
+
+    print()
+
+    mounted_path = []
+    mounted_path = [mount_url_path(final_url, link) for link in links]
+    print(*mounted_path, sep="\n")
+
+    # base = "http://site.com/blog/post.html"
+
+    # mounted_path = ""
+    # mounted_path = mount_url_path(base, "/a.png")             # esperado: http://site.com/a.png
+    # print(mounted_path)
+    # print()
+    # mounted_path = ""
+    # mounted_path = mount_url_path(base, "a.png")              # esperado: http://site.com/blog/a.png
+    # print(mounted_path)
+    # print()
+    # mounted_path = ""
+    # mounted_path = mount_url_path(base, "//cdn.com/a.png")    # esperado: http://cdn.com/a.png
+    # print(mounted_path)
+    # print()
+    # mounted_path = ""
+    # mounted_path = mount_url_path(base, "/docs/http-guide.png")  # esperado: http://site.com/docs/http-guide.png
+    # print(mounted_path)
+    # print()
+
+    # print(f"\nImages => {images}\n")
+    # print(*links, sep="\n")
+    print()
+
+
+def main2() -> None:
+    main()
     # print("                                                     ")
     # print("                                 .:-.                ")
     # print("                            .=#+.                    ")
@@ -163,7 +302,8 @@ def extract() -> None:
     # print("         :-               :                          ")
     # print("                                                     ")
     # print("                                                     ")
+    # arguments()
 
 
 if __name__ == "__main__":
-    extract()
+    main2()
