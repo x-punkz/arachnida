@@ -206,23 +206,76 @@ def extract_links_path(html: str) -> list[str]:
     return links
 
 
-def mount_url_path(url: str, path: str) -> str:
-    schema, base, origin, _ = split_url(url)
-    # print(schema, base, origin, resto)
-    if path:
-        if path.startswith("//"):
-            # print("1")
-            completed_url = schema + ":" + path
+def resolve_dots(rest_url: str) -> str:
+    pieces = rest_url.split("/")
+    result: list[str] = []
 
-        elif path.startswith("/"):
-            # print("2")
-            completed_url = schema + "://" + origin + path
-        else:
-            # print("3")
-            corte = base.rfind("/")
-            caminho = base[:corte + 1]
-            completed_url = schema + "://" + caminho + path
-    return completed_url
+    for piece in pieces:
+        if piece == "..":
+            if len(result) > 1:
+                result.pop()
+        elif piece != ".":
+            result.append(piece)
+
+    if pieces[-1] in (".", ".."):
+        result.append("")
+
+    return "/".join(result)
+
+
+def mount_url_path(url: str, path: str) -> str:
+    scheme, _, origin, rest = split_url(url)
+
+    if path.startswith("//"):
+        return scheme + ":" + path
+
+    if path.lower().startswith(("http://", "https://")):
+        return path
+
+    if not path.startswith("/"):
+        # relative: usa a pasta da base (sem consulta)
+        base_path = re.split(r"[?#]", rest, maxsplit=1)[0]
+        folder = base_path[:base_path.rfind("/") + 1] or "/"
+        path = folder + path
+
+    match = re.match(r"([^?#]*)(.*)", path)
+    assert match
+    new_path, query = match.groups()
+    return scheme + "://" + origin + resolve_dots(new_path) + query
+    # scheme, base, origin, rest = split_url(url)
+    # if path:
+    #     if path.startswith("//"):
+    #         completed_url = scheme + ":" + path
+
+    #     elif path.lower().startswith(("http://", "https://")):
+    #         completed_url = path
+
+    #     elif path.startswith("/"):
+    #         completed_url = scheme + "://" + origin + path
+
+    #     else:
+    #         base = re.split(r"[?#]", base, maxsplit=1)[0]
+    #         corte = base.rfind("/")
+    #         caminho = base[:corte + 1]
+    #         if not caminho:
+    #             caminho = base + "/"
+    #         completed_url = scheme + "://" + caminho + path
+    # return completed_url
+
+
+# def extract_images(url: str, destiny_path: str) -> None:
+#     try:
+#         with urllib.request.urlopen(url, timeout=2) as resp:
+#             content = resp.headers.content_type()
+#             if content in ("image/jpg", "image/jpeg", "image/png", "image/gif", "image/bmp"):
+#                 extension = content.split("/")
+#                 print(extension)
+#                 img_name = f"image.{extension}"
+#                 img_dest_path = os.path.join(destiny_path, img_name)
+
+
+#     except OSError as e:
+#         print(e)
 
 
 def main() -> None:
@@ -241,30 +294,9 @@ def main() -> None:
     mounted_path = [mount_url_path(final_url, image) for image in images]
     print(*mounted_path, sep="\n")
 
-    print()
-
     mounted_path = []
     mounted_path = [mount_url_path(final_url, link) for link in links]
     print(*mounted_path, sep="\n")
-
-    # base = "http://site.com/blog/post.html"
-
-    # mounted_path = ""
-    # mounted_path = mount_url_path(base, "/a.png")             # esperado: http://site.com/a.png
-    # print(mounted_path)
-    # print()
-    # mounted_path = ""
-    # mounted_path = mount_url_path(base, "a.png")              # esperado: http://site.com/blog/a.png
-    # print(mounted_path)
-    # print()
-    # mounted_path = ""
-    # mounted_path = mount_url_path(base, "//cdn.com/a.png")    # esperado: http://cdn.com/a.png
-    # print(mounted_path)
-    # print()
-    # mounted_path = ""
-    # mounted_path = mount_url_path(base, "/docs/http-guide.png")  # esperado: http://site.com/docs/http-guide.png
-    # print(mounted_path)
-    # print()
 
     # print(f"\nImages => {images}\n")
     # print(*links, sep="\n")
