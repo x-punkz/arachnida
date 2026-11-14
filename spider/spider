@@ -4,6 +4,14 @@ import argparse
 import os
 import re
 
+ACCEPTED = {
+        ".jpeg": "image/jpeg",
+        ".jpg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".bmp": "image/bmp",
+    }
+
 
 def recursive_parse(
         parser: argparse.ArgumentParser,
@@ -242,40 +250,45 @@ def mount_url_path(url: str, path: str) -> str:
     assert match
     new_path, query = match.groups()
     return scheme + "://" + origin + resolve_dots(new_path) + query
-    # scheme, base, origin, rest = split_url(url)
-    # if path:
-    #     if path.startswith("//"):
-    #         completed_url = scheme + ":" + path
-
-    #     elif path.lower().startswith(("http://", "https://")):
-    #         completed_url = path
-
-    #     elif path.startswith("/"):
-    #         completed_url = scheme + "://" + origin + path
-
-    #     else:
-    #         base = re.split(r"[?#]", base, maxsplit=1)[0]
-    #         corte = base.rfind("/")
-    #         caminho = base[:corte + 1]
-    #         if not caminho:
-    #             caminho = base + "/"
-    #         completed_url = scheme + "://" + caminho + path
-    # return completed_url
 
 
-# def extract_images(url: str, destiny_path: str) -> None:
-#     try:
-#         with urllib.request.urlopen(url, timeout=2) as resp:
-#             content = resp.headers.content_type()
-#             if content in ("image/jpg", "image/jpeg", "image/png", "image/gif", "image/bmp"):
-#                 extension = content.split("/")
-#                 print(extension)
-#                 img_name = f"image.{extension}"
-#                 img_dest_path = os.path.join(destiny_path, img_name)
+def download_images(url: str, dest_path: str) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            content_type = resp.headers.get_content_type()
+            if content_type not in ACCEPTED.values():
+                print("[ERROR] Ignored, this content is not a image")
+                return False
 
+            img_name = re.split(r"[?#]", url.split("/")[-1])[0]
+            name, extension = os.path.splitext(img_name)
 
-#     except OSError as e:
-#         print(e)
+            if name.startswith(".") or not name:
+                print("[ERROR] Invalid image")
+                return False
+
+            if not extension:
+                img_name += "." + content_type.split("/")[-1]
+
+            elif extension.lower() not in ACCEPTED:
+                print("[ERROR] The image file extension isn't accepted")
+                return False
+
+            img_dest_path = os.path.join(dest_path, img_name)
+            print(img_dest_path)
+
+            with open(img_dest_path, "wb") as img_copy:
+                while True:
+                    chunk = resp.read(32 * 1024)
+                    if chunk == b"":
+                        break
+                    img_copy.write(chunk)
+            print(f"Download complete, image saved in {dest_path}")
+            return True
+
+    except OSError as e:
+        print(e)
+        return False
 
 
 def main() -> None:
@@ -285,19 +298,25 @@ def main() -> None:
     is_recursive, limit, path, url = arguments()
     pure_html, final_url = get_page(url)
     if pure_html is None or final_url is None:
-        return "[Error] Html is not found"
+        return "[ERROR] Html is not found"
 
     images = extract_images_path(pure_html)
     links = extract_links_path(pure_html)
 
     mounted_path: list[str] = []
     mounted_path = [mount_url_path(final_url, image) for image in images]
-    print(*mounted_path, sep="\n")
+    # print(*mounted_path, sep="\n")
 
-    mounted_path = []
-    mounted_path = [mount_url_path(final_url, link) for link in links]
-    print(*mounted_path, sep="\n")
+    mounted_path_link: list[str] = []
+    mounted_path_link = [mount_url_path(final_url, link) for link in links]
+    # print(*mounted_path_link, sep="\n")
 
+    url_test = "http://127.0.0.1:8080/spider-2.png"
+    download_images(url_test, path)
+    url_test = "http://127.0.0.1:8080/spider-2.png?v=2&w=300"
+    download_images(url_test, path)
+    url_test = "http://127.0.0.1:8080/spider-3"
+    download_images(url_test, path)
     # print(f"\nImages => {images}\n")
     # print(*links, sep="\n")
     print()
