@@ -5,6 +5,7 @@ from http.client import HTTPException
 import os
 import re
 
+# Accepted file extensions and content types
 ACCEPTED = {
         ".jpeg": "image/jpeg",
         ".jpg": "image/jpeg",
@@ -12,17 +13,26 @@ ACCEPTED = {
         ".gif": "image/gif",
         ".bmp": "image/bmp",
     }
+# Attributes for searching for images with lazy loadings
+IMG_ATTR = ("data-src", "src", "data-lazy-src", "data-original")
 
+
+# Header to prevent a 403 error when using urllib.request
 HEADERS = {
         "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
                        "Chrome/157.0.0.0 Safari/537.36"),
         "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
-                   "image/avif,image/webp,*/*;q=0.8"),
+                   "image/avif,*/*;q=0.8"),
         "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7,es;q=0.6",
         "Referer": "https://google.com",
         "Connection": "keep-alive"
     }
+# Colors
+GREEN = "\033[32m[+] \033[0m"
+BLOCK = "\033[32m#\033[0m"
+RED = "\033[31m[*] \033[0m"
+YLW = "\033[33m[!] \033[0m"
 
 
 def recursive_parse(
@@ -52,7 +62,7 @@ def split_url(url: str) -> list[str]:
 
 def url_validate(url: str) -> None | str:
     if not url.lower().startswith(("https://", "http://")):
-        return "The [url] must begin with http:// or https://."
+        return f"{RED}The [url] must begin with http:// or https://.\n"
 
     _, host, host_port, _ = split_url(url)
 
@@ -64,8 +74,8 @@ def url_validate(url: str) -> None | str:
     labels = domain.split(".")
     is_valid_domain = True
     for label in labels:
-        # fullmatch so pega se o texto todo obedecer a regra e devolve um
-        # obj match ou none
+        # `fullmatch` only returns a result if the entire text matches
+        # the rule, and returns either a `match` or `none` object
         if not re.fullmatch(r"[a-zA-Z0-9-]{1,63}", label):
             is_valid_domain = False
             break
@@ -74,12 +84,12 @@ def url_validate(url: str) -> None | str:
             break
 
     if not is_valid_domain:
-        return "In URL, [domain] is invalid."
+        return f"{RED}In URL, [domain] is invalid.\n"
 
     if sep == ":":
         if (not (port.isascii() and port.isdigit())
                 or int(port) not in range(1, 65536)):
-            return "In URL, [port] is invalid."
+            return f"{RED}In URL, [port] is invalid.\n"
 
     return None
 
@@ -87,19 +97,19 @@ def url_validate(url: str) -> None | str:
 def path_validate_and_create(path: str) -> None | str:
     if os.path.exists(path):
         if not os.path.isdir(path):
-            return "[path] is not a directory."
+            return f"{RED}[path] is not a directory."
 
         if not os.access(path, os.W_OK | os.X_OK):
-            return "The directory in [path] is not writable."
+            return f"{RED}The directory in [path] is not writable."
     else:
         try:
             os.makedirs(path, exist_ok=True)
             print(
-                "[INFO] The directory does not exist in the path\n"
-                f"created directory '{path}'"
+                f"{GREEN}[INFO] The directory does not exist in the path!\n"
+                f"{GREEN}Created directory '{path}'"
                 )
         except OSError as e:
-            return f"Cannot create directory '{path}': {e}"
+            return f"{RED}Cannot create directory '{path}': {e}"
 
     return None
 
@@ -121,7 +131,7 @@ def arguments() -> tuple[bool, int, str, str]:
             Otherwise, [-l] will not work.
         If -l is not define, it defaults to "5".
         If -p is not define, the default is "./data/".''',
-        # color=False
+        # color=False  # leave the menu in volor or not
     )
     parser.add_argument(
         "-r",
@@ -174,15 +184,32 @@ def get_page(url: str) -> tuple[str | None, str | None]:
         with urllib.request.urlopen(url_w_headers, timeout=5) as resp:
             content = resp.headers.get_content_type()
             if content != "text/html":
-                print(f"Ignored: {url} is {content}")
+                print(f"{YLW}Ignored: {url} is {content}\n")
                 return None, None
             data = resp.read()
             charset = resp.headers.get_content_charset("utf-8")
             converted_data = data.decode(charset, errors="replace")
             return (converted_data, resp.url)
-    except OSError as e:
-        print(e)
+    except (OSError, HTTPException, ValueError) as e:
+        print(f"{RED}{e}\n")
         return None, None
+
+
+def get_attr(attr: str, img_tag: str) -> str | None:
+    matchs = re.search(
+        rf'\s{re.escape(attr)}=(?:"([^\"]*)"|\'([^\']*)\'|([^\s>]+))',
+        img_tag,
+        re.IGNORECASE
+    )
+    if matchs and any(matchs.groups()):
+        clean_img = ((matchs.group(1) or
+                      matchs.group(2) or
+                      matchs.group(3))).replace("&amp;", "&")
+        if clean_img == "":
+            return None
+        else:
+            return clean_img
+    return None
 
 
 def extract_images_path(html: str) -> list[str]:
@@ -191,26 +218,23 @@ def extract_images_path(html: str) -> list[str]:
 
     images_line = re.findall(r"<img\s[^>]*>", html, re.IGNORECASE)
 
-    for tag_img in images_line:
-        matchs = re.search(
-            r'\ssrc=(?:"([^\"]*)"|\'([^\']*)\'|([^\s>]+))',
-            tag_img,
-            re.IGNORECASE
-        )
+    for tag in images_line:
+        for attr in IMG_ATTR:
+            src = get_attr(attr, tag)
+            if src:
+                break
 
-        if matchs and any(matchs.groups()):
-            src = ((matchs.group(1) or
-                    matchs.group(2) or
-                    matchs.group(3))).replace("&amp;", "&")
-            if src.lower().startswith("data:"):
-                continue
+        else:
+            continue
+        if src.lower().startswith("data:"):
+            continue
 
-            path_only = re.split(r"[?#]", src, maxsplit=1)[0]
-            ext = os.path.splitext(path_only)[-1].lower()
+        path_only = re.split(r"[?#]", src, maxsplit=1)[0]
+        ext = os.path.splitext(path_only)[-1].lower()
 
-            if ext and ext not in ACCEPTED:
-                continue
-            images.append(src)
+        if ext and ext not in ACCEPTED:
+            continue
+        images.append(src)
 
     return images
 
@@ -282,6 +306,8 @@ def downloaded_verify(dest_path: str, img_name: str) -> str:
         name += f"({i})"
         img_name = name + ext
         i += 1
+        print(f"{YLW}{orig_name} already exists!")
+        print(f"{GREEN}Creating {img_name}\n")
     return img_name
 
 
@@ -292,85 +318,126 @@ def download_images(url: str, dest_path: str) -> bool:
         with urllib.request.urlopen(url_w_headers, timeout=5) as resp:
             content_type = resp.headers.get_content_type()
             if content_type not in ACCEPTED.values():
-                print("[ERROR] Ignored, this content is not a image")
+                print(f"{YLW}[ERROR] Ignored, the content "
+                      f"'{content_type}' isn't an acceptable image\n")
                 return False
 
             img_name = re.split(r"[?#]", url.split("/")[-1])[0]
             name, extension = os.path.splitext(img_name)
 
             if name.startswith(".") or not name:
-                print("[ERROR] Invalid image")
+                print(f"{YLW}[ERROR] Invalid image\n")
                 return False
 
             if not extension:
                 img_name += "." + content_type.split("/")[-1]
 
             elif extension.lower() not in ACCEPTED:
-                print("[ERROR] The image file extension isn't accepted")
+                print(f"{YLW}[ERROR] The image file extension "
+                      "isn't accepted\n")
                 return False
 
             img_name = downloaded_verify(dest_path, img_name)
 
             img_dest_path = os.path.join(dest_path, img_name)
-            print(img_dest_path)
 
             len_chunck = 0
+            content_len = resp.headers.get("Content-Length")
             with open(img_dest_path, "wb") as img_copy:
                 while True:
+                    if content_len and int(content_len) > 0:
+                        percent = (int(len_chunck) / int(content_len)) * 100
+                        block = int(percent // 5)
+                    else:
+                        # Depois ver esse if !!!!!
+                        percent = 100
+                        block = 100
+                    print(f" Progress... [{BLOCK * block:<20}]"
+                          f"{percent:.0f}%", end="\r", flush=True)
+
                     chunk = resp.read(32 * 1024)
                     len_chunck += len(chunk)
                     if chunk == b"":
                         break
                     img_copy.write(chunk)
-            content_len = resp.headers.get("Content-Length")
             if content_len is not None and len_chunck != int(content_len):
-                raise OSError("[ERROR] Incomplete File.")
+                raise OSError(f"\n\n{RED}[ERROR] Incomplete File.\n")
 
-            print(f"Download complete, image saved in {dest_path}")
+            print(f"\n Image '{img_name}' saved in {dest_path}.\n")
             return True
 
-    except (OSError, HTTPException) as e:
+    except (OSError, HTTPException, ValueError) as e:
         if img_dest_path is not None and os.path.exists(img_dest_path):
             os.remove(img_dest_path)
-        print(e)
+        print(f"{RED}{e}\n")
 
         return False
 
 
-def main() -> None:
+def process_page(url: str, path: str, downloaded: set) -> list[str]:
     images: list[str] = []
     links: list[str] = []
+    mounted_path: list[str] = []
+    mount_path_link: list[str] = []
 
-    is_recursive, limit, path, url = arguments()
     pure_html, final_url = get_page(url)
     if pure_html is None or final_url is None:
-        return "[ERROR] Html is not found"
+        print(f"{RED}[ERROR] Html is not found.")
+        return []
 
     images = extract_images_path(pure_html)
     links = extract_links_path(pure_html)
 
-    mounted_path: list[str] = []
     mounted_path = [mount_url_path(final_url, image) for image in images]
+    mount_path_link = [mount_url_path(final_url, link) for link in links]
 
-    mounted_path_link: list[str] = []
-    mounted_path_link = [mount_url_path(final_url, link) for link in links]
+    print(f"{GREEN}[INFO] Starting download...")
+    for img in mounted_path:
+        if img in downloaded:
+            continue
+        if not download_images(img, path):
+            continue
 
-    url_test = "http://127.0.0.1:8081/spider-2.png"
-    # download_images(url_test, path)
-    # url_test = "http://127.0.0.1:8080/spider-2.png?v=2&w=300"
-    # download_images(url_test, path)
-    print(final_url)
+        downloaded.add(img)
+    return mount_path_link
+
+
+def bfs(base: str, path: str, downloaded: set, limit: int) -> None:
+    visited = {base}
+    curr_level = [base]
+
+    for depth in range(limit + 1):
+        next_level = []
+        print(f"{RED}{RED}Recursion depth: '{depth}'{RED}{RED}")
+        url_link = 1
+        for link in curr_level:
+            print(f"{RED}{RED}Link: '{url_link}'{RED}{RED}")
+            extracted_links = process_page(link, path, downloaded)
+            for x_link in extracted_links:
+                if x_link not in visited:
+                    visited.add(x_link)
+                    next_level.append(x_link)
+            url_link += 1
+        curr_level = next_level
+
+
+def main() -> None:
+    # ignored = len(mounted_path) - len(downloaded)
+    # print(f"{YLW}[INFO] {ignored} images duplicated or ignorated!")
+    # print(f"{GREEN}[INFO] Download is completed!")
+    is_recursive, limit, path, url = arguments()
     downloaded = set()
-    print(mounted_path[2])
-    if url not in downloaded:
-        if download_images(mounted_path[0], path):
-            downloaded.add(url)
 
-    print()
-
+    if is_recursive:
+        bfs(url, path, downloaded, limit)
+    else:
+        process_page(url, path, downloaded)
 
 def main2() -> None:
-    main()
+    try:
+        main()
+    except (KeyboardInterrupt):
+        print(f"{RED}[ERROR] Keyboard interrupted!")
     # print("                                                     ")
     # print("                                 .:-.                ")
     # print("                            .=#+.                    ")
@@ -400,7 +467,8 @@ def main2() -> None:
     # print("         :-               :                          ")
     # print("                                                     ")
     # print("                                                     ")
-    # arguments()
+    # # print("Spider v1.0 Created by daniviei on 42 rio\nCopyright (c) 2026")
+    # main()
 
 
 if __name__ == "__main__":
